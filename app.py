@@ -363,9 +363,9 @@ if __name__ == '__main__':
         server_port=7860,
         css=custom_css,
         theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"),
-        show_api=False,
         share=False
     )
+
 
 
 
