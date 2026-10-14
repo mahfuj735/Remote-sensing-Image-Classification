@@ -250,7 +250,7 @@ def generate_saliency_overlay(model, original_pil):
 def predict(input_image, checkpoint_choice, use_tta, show_heatmap):
     if input_image is None:
         return (
-            "<div style='text-align: center; color: #94a3b8; padding: 24px;'>Please upload a satellite image or choose a sample below.</div>",
+            "<div style='text-align: center; color: #94a3b8; padding: 24px;'>Please upload a satellite image to classify.</div>",
             {},
             None,
             ""
@@ -315,6 +315,7 @@ custom_css = """
 #title-banner { text-align: center; padding: 20px 0 10px 0; margin-bottom: 8px; }
 #title-banner h1 { font-size: 28px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0; }
 #title-banner p { font-size: 14px; color: #64748b; margin: 0; }
+footer { display: none !important; }
 """
 
 with gr.Blocks(title="LiteRS-Mamba") as demo:
@@ -344,26 +345,10 @@ with gr.Blocks(title="LiteRS-Mamba") as demo:
             classify_btn = gr.Button("Classify Image", variant="primary", size="lg")
 
         with gr.Column(scale=1):
-            badge_output = gr.HTML("<div style='text-align: center; color: #94a3b8; padding: 24px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload an image or pick a sample below.</div>")
+            badge_output = gr.HTML("<div style='text-align: center; color: #94a3b8; padding: 24px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload a satellite image to classify.</div>")
             image_output = gr.Image(label="Attention Heatmap Overlay", height=240)
             label_output = gr.Label(num_top_classes=3, label="Top Probabilities")
             telemetry_output = gr.HTML("")
-
-    sample_dir = BASE_DIR / 'sample_images'
-    sample_paths = []
-    if sample_dir.exists():
-        for f in sorted(sample_dir.glob('*.png'))[:7]:
-            sample_paths.append([str(f), 'ArcGIS Map (Default)', False, True])
-
-    if sample_paths:
-        gr.Markdown("#### Sample Satellite Tiles")
-        gr.Examples(
-            examples=sample_paths,
-            inputs=[image_input, checkpoint_dropdown, tta_checkbox, heatmap_checkbox],
-            outputs=[badge_output, label_output, image_output, telemetry_output],
-            fn=predict,
-            cache_examples=False
-        )
 
     classify_btn.click(
         fn=predict,
@@ -378,7 +363,9 @@ if __name__ == '__main__':
         server_port=7860,
         css=custom_css,
         theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"),
+        show_api=False,
         share=False
     )
+
 
 
