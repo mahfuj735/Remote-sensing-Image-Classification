@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Windows desktop.ini
+desktop.ini
+Desktop.ini
