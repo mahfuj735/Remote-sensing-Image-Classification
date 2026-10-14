@@ -41,13 +41,13 @@ CLASS_ICONS = {
 }
 
 CLASS_DESCRIPTIONS = {
-    'Agricultural_Land': 'Cultivated cropland, dynamic paddy fields, and alluvial agricultural terrain.',
-    'Beaches_Coastline': 'Sandy shorelines, intertidal coastal sand, and tidal mudflats.',
-    'Built_up_Areas': 'Urban settlements, residential structures, transportation, and impervious infrastructure.',
-    'Grasslands_Open_Land': 'Open grazing fields, riverine sandbars (chars), and uncultivated grassland.',
-    'Hills_Mountains': 'Elevated hilly topography, forested slopes, and undulating terrain.',
-    'Trees_Forests': 'Dense natural canopy, mangrove belts, protected forests, and heavy vegetation.',
-    'Water_Bodies': 'Rivers, lakes, natural water channels, canals, and seasonal wetlands.'
+    'Agricultural_Land': 'Cultivated cropland, paddy fields, and alluvial agricultural terrain.',
+    'Beaches_Coastline': 'Sandy shorelines, intertidal coastal sand, and coastal mudflats.',
+    'Built_up_Areas': 'Urban settlements, buildings, roads, and impervious infrastructure.',
+    'Grasslands_Open_Land': 'Open grazing fields, riverine chars, and naturally vegetated ground.',
+    'Hills_Mountains': 'Elevated hilly topography, tea gardens, and tropical slopes.',
+    'Trees_Forests': 'Dense mangrove canopy, forestry tracts, and wooded areas.',
+    'Water_Bodies': 'Rivers, canals, lakes, and seasonal flood wetland waters.'
 }
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -182,7 +182,7 @@ class LiteRSMamba(nn.Module):
         return out
 
 # -----------------------------------------------------------------------------
-# 3. MODEL INITIALIZATION
+# 3. MODEL INITIALIZATION (OPTIMAL BENCHMARK WEIGHTS)
 # -----------------------------------------------------------------------------
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 BASE_DIR = Path(__file__).parent.resolve()
@@ -197,29 +197,16 @@ model.to(DEVICE)
 model.eval()
 
 # -----------------------------------------------------------------------------
-# 4. PREDICTION HANDLER (HIGH-END MODERN HTML OUTPUT)
+# 4. PREDICTION HANDLER (CLEAN & DIRECT)
 # -----------------------------------------------------------------------------
-EMPTY_STATE_HTML = """
-<div style="background: #ffffff; border: 1.5px dashed #cbd5e1; border-radius: 16px; padding: 48px 24px; text-align: center; box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.03);">
-    <div style="width: 56px; height: 56px; margin: 0 auto 16px auto; background: #eff6ff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; border: 1px solid #bfdbfe;">
-        🛰️
-    </div>
-    <div style="font-size: 17px; font-weight: 700; color: #1e293b; margin-bottom: 6px;">Ready for Satellite Scene</div>
-    <div style="font-size: 13.5px; color: #64748b; max-width: 380px; margin: 0 auto 20px auto; line-height: 1.5;">
-        Upload or drop an aerial or satellite tile on the left and click Classify to inspect land cover predictions.
-    </div>
-    <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
-        <span style="background: #f1f5f9; color: #475569; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9999px;">⚡ 2.05M Params</span>
-        <span style="background: #f1f5f9; color: #475569; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9999px;">🎯 99.01% Top-1 Accuracy</span>
-        <span style="background: #f1f5f9; color: #475569; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9999px;">🌐 7 Land Classes</span>
-    </div>
-</div>
-"""
-
 @gpu_decorator
 def predict(input_image):
     if input_image is None:
-        return EMPTY_STATE_HTML, {}, ""
+        return (
+            "<div style='text-align: center; color: #94a3b8; padding: 40px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload a satellite image to classify.</div>",
+            {},
+            ""
+        )
     
     t0 = time.perf_counter()
     original_pil = Image.fromarray(input_image) if isinstance(input_image, np.ndarray) else input_image
@@ -242,164 +229,54 @@ def predict(input_image):
 
     prob_dict = {f"{CLASS_ICONS[c]} {c.replace('_', ' ')}": float(probs[i]) for i, c in enumerate(CLASS_NAMES)}
 
-    device_label = "ZeroGPU (CUDA)" if DEVICE.type == 'cuda' else "CPU Acceleration"
-
     badge_html = f"""
-    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 26px; box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.05), 0 8px 10px -6px rgba(15, 23, 42, 0.03);">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-            <span style="background: #f1f5f9; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; padding: 4px 10px; border-radius: 6px;">
-                Detected Category
-            </span>
-            <span style="background: linear-gradient(135deg, #0284c7, #2563eb); color: #ffffff; font-size: 13px; font-weight: 700; padding: 4px 14px; border-radius: 9999px; box-shadow: 0 2px 8px rgba(37,99,235,0.25);">
-                {pred_conf:.1f}% Confidence
-            </span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 12px;">
-            <div style="font-size: 38px; line-height: 1; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));">{pred_icon}</div>
-            <div>
-                <div style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.3px;">{clean_name}</div>
-                <div style="font-size: 13.5px; color: #64748b; line-height: 1.4; margin-top: 3px;">{pred_desc}</div>
-            </div>
-        </div>
-        <div style="margin-top: 16px; background: #f8fafc; border-radius: 8px; height: 8px; overflow: hidden; border: 1px solid #e2e8f0;">
-            <div style="background: linear-gradient(90deg, #38bdf8, #2563eb); height: 100%; width: {pred_conf:.1f}%; border-radius: 8px;"></div>
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 22px; text-align: center;">
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; font-weight: 600; margin-bottom: 6px;">Predicted Category</div>
+        <div style="font-size: 28px; font-weight: 800; color: #0f172a; margin: 6px 0;">{pred_icon} {clean_name}</div>
+        <div style="font-size: 14px; color: #475569; margin-bottom: 12px; max-width: 440px; margin-left: auto; margin-right: auto; line-height: 1.4;">{pred_desc}</div>
+        <div style="display: inline-block; background: #e0f2fe; color: #0284c7; padding: 5px 16px; border-radius: 9999px; font-weight: 700; font-size: 15px;">
+            {pred_conf:.1f}% Confidence
         </div>
     </div>
     """
 
+    device_label = "GPU" if DEVICE.type == 'cuda' else "CPU"
     telemetry_html = f"""
-    <div style="display: flex; justify-content: space-around; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px; margin-top: 12px; font-size: 12.5px; color: #475569; box-shadow: 0 2px 6px rgba(0,0,0,0.02);">
-        <div>⚡ <b>Latency:</b> <span style="color: #0f172a; font-weight: 700;">{elapsed_ms:.1f} ms</span></div>
-        <div style="color: #cbd5e1;">|</div>
-        <div>💻 <b>Compute:</b> <span style="color: #0f172a; font-weight: 600;">{device_label}</span></div>
-        <div style="color: #cbd5e1;">|</div>
-        <div>📦 <b>Model:</b> <span style="color: #0f172a; font-weight: 600;">2.05M Params</span></div>
+    <div style="text-align: center; font-size: 12px; color: #94a3b8; padding-top: 8px;">
+        ⚡ <b>Inference:</b> {elapsed_ms:.1f} ms ({device_label}) &nbsp;|&nbsp; 📦 <b>Architecture:</b> LiteRS-Mamba (2.05M Params)
     </div>
     """
 
     return badge_html, prob_dict, telemetry_html
 
 # -----------------------------------------------------------------------------
-# 5. MODERN PREMIUM GRADIO INTERFACE (ENGLISH ONLY)
+# 5. ULTRA-CLEAN GRADIO INTERFACE (ENGLISH ONLY, NO CLUTTER)
 # -----------------------------------------------------------------------------
 custom_css = """
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-
-* {
-    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-}
-
-body, .gradio-container {
-    background: #f8fafc !important;
-    max-width: 1080px !important;
-    margin: 0 auto !important;
-    padding-top: 12px !important;
-}
-
-#header-card {
-    text-align: center;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 20px;
-    padding: 28px 24px 22px 24px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04);
-}
-
-#header-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    color: #1d4ed8;
-    padding: 4px 14px;
-    border-radius: 9999px;
-    font-size: 12px;
-    font-weight: 700;
-    margin-bottom: 10px;
-    letter-spacing: 0.3px;
-}
-
-#header-title {
-    font-size: 32px;
-    font-weight: 800;
-    color: #0f172a;
-    letter-spacing: -0.5px;
-    margin: 0 0 6px 0;
-}
-
-#header-subtitle {
-    font-size: 15px;
-    color: #64748b;
-    margin: 0 auto;
-    max-width: 580px;
-    line-height: 1.5;
-}
-
-.panel-card {
-    background: #ffffff !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 18px !important;
-    padding: 18px !important;
-    box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.04) !important;
-}
-
-.primary-btn {
-    background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%) !important;
-    color: #ffffff !important;
-    border: none !important;
-    border-radius: 12px !important;
-    font-weight: 700 !important;
-    font-size: 15px !important;
-    padding: 12px 24px !important;
-    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35) !important;
-    transition: all 0.2s ease !important;
-}
-
-.primary-btn:hover {
-    transform: translateY(-1px) !important;
-    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.45) !important;
-}
-
-footer {
-    display: none !important;
-}
+.gradio-container { max-width: 960px !important; margin: 0 auto !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+#title-banner { text-align: center; padding: 24px 0 16px 0; margin-bottom: 12px; }
+#title-banner h1 { font-size: 30px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0; }
+#title-banner p { font-size: 15px; color: #64748b; margin: 0; }
+footer { display: none !important; }
 """
 
 with gr.Blocks(title="LiteRS-Mamba") as demo:
     
     gr.HTML("""
-    <div id="header-card">
-        <div id="header-badge">
-            <span>⚡ LiteRS-Mamba v1.0 • O4-SSM Architecture</span>
-        </div>
-        <h1 id="header-title">🛰️ Satellite Land Cover Classification</h1>
-        <p id="header-subtitle">
-            Ultra-lightweight State Space Model engineered for high-precision Earth observation & multi-platform scene intelligence.
-        </p>
+    <div id="title-banner">
+        <h1>🛰️ LiteRS-Mamba</h1>
+        <p>Satellite Land Cover Classification</p>
     </div>
     """)
 
     with gr.Row():
-        with gr.Column(scale=1, elem_classes=["panel-card"]):
-            gr.Markdown("### 📥 Input Satellite Scene")
-            image_input = gr.Image(
-                type="pil",
-                label="Upload or Drop Satellite Tile",
-                height=300
-            )
-            classify_btn = gr.Button(
-                "⚡ Classify Land Cover",
-                variant="primary",
-                size="lg",
-                elem_classes=["primary-btn"]
-            )
+        with gr.Column(scale=1):
+            image_input = gr.Image(type="pil", label="Upload Satellite Image", height=320)
+            classify_btn = gr.Button("Classify Image", variant="primary", size="lg")
 
-        with gr.Column(scale=1, elem_classes=["panel-card"]):
-            gr.Markdown("### 📊 Classification Intelligence")
-            badge_output = gr.HTML(EMPTY_STATE_HTML)
-            label_output = gr.Label(num_top_classes=5, label="Top Class Distribution")
+        with gr.Column(scale=1):
+            badge_output = gr.HTML("<div style='text-align: center; color: #94a3b8; padding: 40px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload a satellite image to see classification results.</div>")
+            label_output = gr.Label(num_top_classes=5, label="Top Class Probabilities")
             telemetry_output = gr.HTML("")
 
     classify_btn.click(
