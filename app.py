@@ -1,24 +1,16 @@
-try:
-    import spaces
-    gpu_decorator = spaces.GPU(duration=15)
-except Exception:
-    def gpu_decorator(fn):
-        return fn
-
-# ==============================================================================
-# LiteRS-Mamba: Real-Time Satellite Land Cover Classification Dashboard
-# Multi-Platform Remote Sensing Intelligence for Bangladesh Deltaic Terrain
-# Paper/Thesis: Multi-Platform Remote Sensing Image Classification in Bangladesh
-# Author: Md. Mahfujul Karim Sheikh (ID: CSE11220120735)
-# Compatible with: Hugging Face Spaces (Gradio) & Standalone Local Deployment
-# ==============================================================================
-
 import os
 import time
 from pathlib import Path
 import numpy as np
 from PIL import Image
 import matplotlib.cm as cm
+
+try:
+    import spaces
+    gpu_decorator = spaces.GPU(duration=15)
+except Exception:
+    def gpu_decorator(fn):
+        return fn
 
 import torch
 import torch.nn as nn
@@ -27,7 +19,7 @@ from torchvision import transforms
 import gradio as gr
 
 # -----------------------------------------------------------------------------
-# 1. CONSTANTS & METADATA
+# 1. CONSTANTS & METADATA (ENGLISH ONLY)
 # -----------------------------------------------------------------------------
 CLASS_NAMES = [
     'Agricultural_Land',
@@ -49,17 +41,16 @@ CLASS_ICONS = {
     'Water_Bodies': '🌊'
 }
 
-CLASS_BENGALI = {
-    'Agricultural_Land': 'ফসলি জমি / কৃষি ভূমি',
-    'Beaches_Coastline': 'সমুদ্র সৈকত / উপকূলরেখা',
-    'Built_up_Areas': 'শহরাঞ্চল / পাকা অবকাঠামো',
-    'Grasslands_Open_Land': 'ঘাসজমি / উন্মুক্ত চর ও পতিত জমি',
-    'Hills_Mountains': 'পাহাড় / টিলা পর্বত অঞ্চল',
-    'Trees_Forests': 'গাছপালা / বনাঞ্চল (যেমন সুন্দরবন)',
-    'Water_Bodies': 'নদী, খাল, বিল, হাওর ও জলাশয়'
+CLASS_DESCRIPTIONS = {
+    'Agricultural_Land': 'Cultivated cropland, paddy fields, and alluvial agricultural terrain.',
+    'Beaches_Coastline': 'Sandy shorelines, intertidal coastal sand, and coastal mudflats.',
+    'Built_up_Areas': 'Urban settlements, buildings, roads, and impervious infrastructure.',
+    'Grasslands_Open_Land': 'Open grazing fields, riverine chars, and naturally vegetated ground.',
+    'Hills_Mountains': 'Elevated hilly topography, tea gardens, and tropical slopes.',
+    'Trees_Forests': 'Dense mangrove canopy, forestry tracts, and wooded areas.',
+    'Water_Bodies': 'Rivers, canals, lakes, and seasonal flood wetland waters.'
 }
 
-# ImageNet normalization parameters
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
@@ -70,7 +61,7 @@ EVAL_TRANSFORMS = transforms.Compose([
 ])
 
 # -----------------------------------------------------------------------------
-# 2. LITERS-MAMBA NEURAL ARCHITECTURE
+# 2. LITERS-MAMBA ARCHITECTURE
 # -----------------------------------------------------------------------------
 @torch.jit.script
 def fast_selective_scan(u: torch.Tensor, dt: torch.Tensor, A: torch.Tensor, B_mat: torch.Tensor, C_mat: torch.Tensor, D: torch.Tensor) -> torch.Tensor:
@@ -202,9 +193,9 @@ CHECKPOINT_DIR = BASE_DIR / 'checkpoints'
 
 MODEL_CACHE = {}
 
-def get_model(checkpoint_choice='ArcGIS Map (Recommended)'):
+def get_model(checkpoint_choice='ArcGIS Map (Default)'):
     tag_map = {
-        'ArcGIS Map (Recommended)': 'best_liters_mamba_ArcGIS_Map.pth',
+        'ArcGIS Map (Default)': 'best_liters_mamba_ArcGIS_Map.pth',
         'Bing Maps': 'best_liters_mamba_Bing_Maps.pth',
         'Google Maps': 'best_liters_mamba_Google_Maps.pth'
     }
@@ -218,28 +209,19 @@ def get_model(checkpoint_choice='ArcGIS Map (Recommended)'):
         ckpt = torch.load(ckpt_path, map_location=DEVICE)
         state = ckpt.get('model_state_dict', ckpt)
         model.load_state_dict(state, strict=True)
-    else:
-        print(f'Warning: Checkpoint {ckpt_path} not found. Running with random weights.')
-        
     model.to(DEVICE)
     model.eval()
     MODEL_CACHE[filename] = model
     return model
 
-# Warmup default model at startup
-_ = get_model('ArcGIS Map (Recommended)')
+_ = get_model('ArcGIS Map (Default)')
 
 # -----------------------------------------------------------------------------
-# 4. TEST-TIME RADIOMETRIC ADAPTATION (TTA-RHM)
+# 4. TTA & ATTENTION SALIENCY
 # -----------------------------------------------------------------------------
 def apply_reference_histogram_matching(image_np):
-    """
-    Fast Test-Time Histogram Matching to align spectral distribution 
-    of query images to reference ArcGIS sensor profile.
-    """
     matched = np.zeros_like(image_np)
     target_stats = [(92.4, 45.2), (105.1, 41.8), (90.2, 38.6)]
-    
     for c in range(3):
         ch = image_np[:, :, c].astype(np.float32)
         c_mean, c_std = ch.mean(), ch.std() + 1e-6
@@ -248,49 +230,33 @@ def apply_reference_histogram_matching(image_np):
         matched[:, :, c] = np.clip(aligned, 0, 255).astype(np.uint8)
     return matched
 
-# -----------------------------------------------------------------------------
-# 5. GRAD-CAM & ATTENTION SALIENCY ENGINE
-# -----------------------------------------------------------------------------
-def generate_saliency_overlay(model, input_tensor, original_pil):
-    """
-    Generates spatial feature activation heatmap overlaid on input image.
-    """
+def generate_saliency_overlay(model, original_pil):
     feat = model.last_stem_features
     if feat is None:
         return original_pil
-    
     sal_map = feat.detach().abs().mean(dim=1).squeeze(0).cpu().numpy()
     sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
-    
     sal_pil = Image.fromarray((sal_map * 255).astype(np.uint8)).resize(original_pil.size, Image.Resampling.BILINEAR)
     sal_norm = np.array(sal_pil).astype(np.float32) / 255.0
-    
-    colored_map = cm.jet(sal_norm)[:, :, :3]
-    colored_map = (colored_map * 255).astype(np.uint8)
-    
+    colored_map = (cm.jet(sal_norm)[:, :, :3] * 255).astype(np.uint8)
     orig_np = np.array(original_pil.convert('RGB'))
     blended = (0.55 * orig_np + 0.45 * colored_map).astype(np.uint8)
     return Image.fromarray(blended)
 
 # -----------------------------------------------------------------------------
-# 6. CORE INFERENCE PIPELINE
+# 5. PREDICTION HANDLER (ENGLISH ONLY, MINIMALIST)
 # -----------------------------------------------------------------------------
 @gpu_decorator
-def classify_satellite_scene(
-    input_image,
-    checkpoint_choice,
-    use_tta,
-    show_heatmap
-):
+def predict(input_image, checkpoint_choice, use_tta, show_heatmap):
     if input_image is None:
         return (
-            "<div style='color: #e74c3c; font-weight: bold;'>⚠️ Please upload an image or select a sample tile from the gallery below.</div>",
+            "<div style='text-align: center; color: #94a3b8; padding: 24px;'>Please upload a satellite image or choose a sample below.</div>",
             {},
             None,
-            "Latency: 0 ms | FPS: 0 | Memory: 0 MB"
+            ""
         )
     
-    start_time = time.perf_counter()
+    t0 = time.perf_counter()
     original_pil = Image.fromarray(input_image) if isinstance(input_image, np.ndarray) else input_image
     original_pil = original_pil.convert('RGB')
     
@@ -308,158 +274,99 @@ def classify_satellite_scene(
         logits = model(inp_tensor)
         probs = F.softmax(logits, dim=-1)[0].cpu().numpy()
 
-    elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-    fps = 1000.0 / (elapsed_ms + 1e-6)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
     pred_idx = int(np.argmax(probs))
     pred_class = CLASS_NAMES[pred_idx]
     pred_conf = float(probs[pred_idx]) * 100.0
     pred_icon = CLASS_ICONS[pred_class]
-    pred_bn = CLASS_BENGALI[pred_class]
+    pred_desc = CLASS_DESCRIPTIONS[pred_class]
+    clean_name = pred_class.replace('_', ' ')
 
     prob_dict = {f"{CLASS_ICONS[c]} {c.replace('_', ' ')}": float(probs[i]) for i, c in enumerate(CLASS_NAMES)}
 
-    if show_heatmap:
-        overlay_pil = generate_saliency_overlay(model, inp_tensor, original_pil)
-    else:
-        overlay_pil = processed_pil
+    overlay_pil = generate_saliency_overlay(model, original_pil) if show_heatmap else processed_pil
 
     badge_html = f"""
-    <div style="background: linear-gradient(135deg, #0d1b2a, #1b263b); border: 2px solid #00b4d8; border-radius: 12px; padding: 18px; text-align: center; color: white; box-shadow: 0 4px 15px rgba(0, 180, 216, 0.25);">
-        <div style="font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: #90e0ef; margin-bottom: 4px;">Predicted Land Cover Category</div>
-        <div style="font-size: 30px; font-weight: 800; margin: 6px 0; color: #ffffff;">{pred_icon} {pred_class.replace('_', ' ')}</div>
-        <div style="font-size: 16px; color: #caf0f8; margin-bottom: 10px;">বাংলা: <b>{pred_bn}</b></div>
-        <div style="display: inline-block; background: rgba(0, 180, 216, 0.2); border: 1px solid #00b4d8; padding: 6px 16px; border-radius: 20px; font-size: 18px; font-weight: 700; color: #48cae4;">
-            Confidence: {pred_conf:.2f}%
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; text-align: center;">
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; font-weight: 600; margin-bottom: 4px;">Predicted Category</div>
+        <div style="font-size: 26px; font-weight: 800; color: #0f172a; margin: 4px 0;">{pred_icon} {clean_name}</div>
+        <div style="font-size: 13px; color: #475569; margin-bottom: 10px; max-width: 440px; margin-left: auto; margin-right: auto;">{pred_desc}</div>
+        <div style="display: inline-block; background: #e0f2fe; color: #0284c7; padding: 4px 14px; border-radius: 9999px; font-weight: 700; font-size: 14px;">
+            {pred_conf:.1f}% Confidence
         </div>
     </div>
     """
 
-    device_str = 'NVIDIA GPU (CUDA)' if DEVICE.type == 'cuda' else 'Intel/AMD CPU'
+    device_label = "GPU" if DEVICE.type == 'cuda' else "CPU"
     telemetry_html = f"""
-    <div style="font-family: monospace; font-size: 13px; background: #0b0f19; border: 1px solid #1f2937; border-radius: 8px; padding: 12px; color: #10b981;">
-        ⚡ <b>Inference Latency:</b> {elapsed_ms:.1f} ms | <b>Throughput:</b> {fps:.1f} FPS<br>
-        ⚙️ <b>Execution Engine:</b> PyTorch Native ({device_str})<br>
-        📦 <b>Model Parameters:</b> 2.05 M | <b>Memory Footprint:</b> 8.25 MB (FP32) / 2.06 MB (INT8 ONNX)
+    <div style="text-align: center; font-size: 12px; color: #64748b; padding-top: 6px;">
+        ⚡ <b>Inference:</b> {elapsed_ms:.1f} ms ({device_label}) &nbsp;|&nbsp; 📦 <b>Model:</b> 2.05M Params (8.25 MB)
     </div>
     """
 
     return badge_html, prob_dict, overlay_pil, telemetry_html
 
 # -----------------------------------------------------------------------------
-# 7. GRADIO APP INTERFACE DEFINITION
+# 6. MINIMALIST, CLEAN GRADIO INTERFACE (ENGLISH ONLY)
 # -----------------------------------------------------------------------------
 custom_css = """
-#main-container { max-width: 1200px; margin: 0 auto; font-family: 'Segoe UI', system-ui, sans-serif; }
-.header-box { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%); border: 1px solid #312e81; border-radius: 16px; padding: 24px; margin-bottom: 24px; text-align: center; }
-.header-title { font-size: 32px; font-weight: 800; background: linear-gradient(to right, #60a5fa, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; }
-.header-subtitle { color: #94a3b8; font-size: 15px; max-width: 850px; margin: 0 auto; line-height: 1.5; }
+.gradio-container { max-width: 1050px !important; margin: 0 auto !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+#title-banner { text-align: center; padding: 20px 0 10px 0; margin-bottom: 8px; }
+#title-banner h1 { font-size: 28px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0; }
+#title-banner p { font-size: 14px; color: #64748b; margin: 0; }
 """
 
-with gr.Blocks(title="LiteRS-Mamba: Satellite Land Cover Intelligence") as demo:
+with gr.Blocks(title="LiteRS-Mamba") as demo:
     
-    with gr.Column(elem_id="main-container"):
-        gr.HTML("""
-        <div class="header-box">
-            <div style="display: inline-block; background: rgba(59, 130, 246, 0.15); border: 1px solid #3b82f6; border-radius: 20px; padding: 4px 14px; font-size: 12px; color: #93c5fd; font-weight: 600; margin-bottom: 12px;">
-                🛰️ PhD/Master's Thesis Research Deliverable | MLC-BD Benchmark
-            </div>
-            <h1 class="header-title">LiteRS-Mamba: Real-Time Land Cover Classification</h1>
-            <p class="header-subtitle">
-                An ultra-lightweight (2.05 M parameters) 4-Way Omnidirectional State Space Model (O4-SSM) with Multi-Scale Stem 
-                engineered for edge UAV, drone, and multi-platform satellite remote sensing across the deltaic ecosystems of Bangladesh.
-            </p>
-        </div>
-        """)
+    gr.HTML("""
+    <div id="title-banner">
+        <h1>🛰️ LiteRS-Mamba</h1>
+        <p>Satellite Land Cover Classification for Bangladesh</p>
+    </div>
+    """)
 
-        with gr.Row():
-            with gr.Column(scale=5):
-                gr.Markdown("### 📥 Input Satellite Scene")
-                image_input = gr.Image(
-                    type="pil", 
-                    label="Upload Satellite / UAV Image (RGB)",
-                    elem_id="input-image",
-                    height=320
+    with gr.Row():
+        with gr.Column(scale=1):
+            image_input = gr.Image(type="pil", label="Input Satellite Image", height=280)
+            
+            with gr.Row():
+                checkpoint_dropdown = gr.Dropdown(
+                    choices=['ArcGIS Map (Default)', 'Bing Maps', 'Google Maps'],
+                    value='ArcGIS Map (Default)',
+                    label="Model Training Domain"
                 )
-                
-                with gr.Row():
-                    checkpoint_dropdown = gr.Dropdown(
-                        choices=['ArcGIS Map (Recommended)', 'Bing Maps', 'Google Maps'],
-                        value='ArcGIS Map (Recommended)',
-                        label="Model Training Weights",
-                        info="Trained sensor source domain"
-                    )
-                
-                with gr.Row():
-                    tta_checkbox = gr.Checkbox(
-                        label="Apply TTA Radiometric Adaptation",
-                        value=False,
-                        info="Auto-aligns cross-platform color shifts (Google Maps)"
-                    )
-                    heatmap_checkbox = gr.Checkbox(
-                        label="Generate Grad-CAM Attention Heatmap",
-                        value=True,
-                        info="Highlights spatial features guiding the decision"
-                    )
+            
+            with gr.Row():
+                tta_checkbox = gr.Checkbox(label="Color Adaptation (TTA)", value=False)
+                heatmap_checkbox = gr.Checkbox(label="Show Attention Heatmap", value=True)
 
-                with gr.Row():
-                    submit_btn = gr.Button("🚀 Classify Land Cover", variant="primary", size="lg")
-                    clear_btn = gr.ClearButton(components=[image_input], value="🧹 Clear")
+            classify_btn = gr.Button("Classify Image", variant="primary", size="lg")
 
-            with gr.Column(scale=6):
-                gr.Markdown("### 🎯 Inference Results & XAI Saliency")
-                badge_output = gr.HTML(
-                    value="<div style='padding: 30px; text-align: center; color: #64748b; border: 2px dashed #334155; border-radius: 12px;'>Upload an image or pick a gallery sample to view prediction.</div>"
-                )
-                
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        image_output = gr.Image(label="Model Visual Attention / Saliency Overlay", height=260)
-                    with gr.Column(scale=1):
-                        label_output = gr.Label(num_top_classes=4, label="Top Class Probabilities")
+        with gr.Column(scale=1):
+            badge_output = gr.HTML("<div style='text-align: center; color: #94a3b8; padding: 24px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload an image or pick a sample below.</div>")
+            image_output = gr.Image(label="Attention Heatmap Overlay", height=240)
+            label_output = gr.Label(num_top_classes=3, label="Top Probabilities")
+            telemetry_output = gr.HTML("")
 
-                telemetry_output = gr.HTML(
-                    value="<div style='font-family: monospace; font-size: 12px; color: #64748b; padding: 8px;'>Telemetry: Ready for inference...</div>"
-                )
+    sample_dir = BASE_DIR / 'sample_images'
+    sample_paths = []
+    if sample_dir.exists():
+        for f in sorted(sample_dir.glob('*.png'))[:7]:
+            sample_paths.append([str(f), 'ArcGIS Map (Default)', False, True])
 
-        sample_dir = BASE_DIR / 'sample_images'
-        sample_paths = []
-        if sample_dir.exists():
-            for f in sorted(sample_dir.glob('*.png')):
-                sample_paths.append([str(f), 'ArcGIS Map (Recommended)', False, True])
+    if sample_paths:
+        gr.Markdown("#### Sample Satellite Tiles")
+        gr.Examples(
+            examples=sample_paths,
+            inputs=[image_input, checkpoint_dropdown, tta_checkbox, heatmap_checkbox],
+            outputs=[badge_output, label_output, image_output, telemetry_output],
+            fn=predict,
+            cache_examples=False
+        )
 
-        if sample_paths:
-            gr.Markdown("### 🖼️ Sample Gallery Across All 7 LULC Classes (One-Click Test)")
-            gr.Examples(
-                examples=sample_paths,
-                inputs=[image_input, checkpoint_dropdown, tta_checkbox, heatmap_checkbox],
-                outputs=[badge_output, label_output, image_output, telemetry_output],
-                fn=classify_satellite_scene,
-                cache_examples=False,
-                label="Click any sample tile below to test instant classification:"
-            )
-
-        with gr.Accordion("📖 About the 7 Bangladesh Land Cover Categories & Architecture", open=False):
-            gr.Markdown("""
-| Class Name | Bengali Meaning | Key Physical Features & Bangladesh Context |
-| :--- | :--- | :--- |
-| **🌾 Agricultural Land** | ফসলি জমি / কৃষি ভূমি | Irrigated paddy fields, crop parcels, alluvial silt cultivation across Rajshahi & Rangpur. |
-| **🏖️ Beaches & Coastline** | সমুদ্র সৈকত ও উপকূলরেখা | Sandy shorelines, intertidal coastal mudflats in Cox's Bazar, Kuakata & Sundarbans coast. |
-| **🏙️ Built-up Areas** | শহরাঞ্চল ও অবকাঠামো | Dense impervious concrete roofs, roads, and urban settlements in Dhaka, Chittagong. |
-| **🌿 Grasslands & Open Land** | ঘাসজমি ও চরাঞ্চল | Naturally vegetated chars, fallow grazing grounds, riparian riverine bars in Jamuna basin. |
-| **⛰️ Hills & Mountains** | পাহাড় ও টিলা অঞ্চল | Elevated hilly topography, tea gardens, tropical slopes in Chittagong Hill Tracts & Sylhet. |
-| **🌲 Trees & Forests** | গাছপালা ও বনাঞ্চল | Dense mangrove canopy of Sundarbans, Sal forests of Madhupur, and social forestry tracts. |
-| **🌊 Water Bodies** | নদী, খাল ও জলাশয় | Major braided rivers (Padma, Jamuna, Meghna), coastal estuaries, seasonal Haor wetlands. |
-
-### 🔬 Architecture & Edge Highlights
-* **Parameters:** 2.05 M parameters (11.5x smaller than ResNet-50 and 13.8x smaller than Swin-T).
-* **Stem:** Multi-Scale Stem with dual 3x3 and 5x5 receptive fields for resolving narrow deltaic channels.
-* **Scan Engine:** 4-Way Omnidirectional Selective Scan with learnable Softmax Directional Fusion.
-* **Edge Optimization:** Fully exportable to universal **ONNX Opset 17** and **INT8 Post-Training Quantization** (8.58 MB footprint, 99.71% decision agreement).
-            """)
-
-    submit_btn.click(
-        fn=classify_satellite_scene,
+    classify_btn.click(
+        fn=predict,
         inputs=[image_input, checkpoint_dropdown, tta_checkbox, heatmap_checkbox],
         outputs=[badge_output, label_output, image_output, telemetry_output],
         api_name="predict"
@@ -469,7 +376,9 @@ if __name__ == '__main__':
     demo.launch(
         server_name='0.0.0.0',
         server_port=7860,
-        theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"),
         css=custom_css,
+        theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"),
         share=False
     )
+
+
