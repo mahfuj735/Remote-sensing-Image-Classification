@@ -3,7 +3,6 @@ import time
 from pathlib import Path
 import numpy as np
 from PIL import Image
-import matplotlib.cm as cm
 
 try:
     import spaces
@@ -171,11 +170,9 @@ class LiteRSMamba(nn.Module):
         self.blocks = nn.ModuleList([FastOmniSSMBlock(d_model=embed_dim, d_state=16, expand=2) for _ in range(depth)])
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
-        self.last_stem_features = None
 
     def forward(self, x):
         feat = self.stem(x)
-        self.last_stem_features = feat
         tokens = feat.flatten(2).transpose(1, 2) + self.pos_embed
         for blk in self.blocks:
             tokens = blk(tokens, 14, 14)
@@ -185,74 +182,29 @@ class LiteRSMamba(nn.Module):
         return out
 
 # -----------------------------------------------------------------------------
-# 3. MODEL MANAGEMENT & CACHING
+# 3. MODEL INITIALIZATION (OPTIMAL BENCHMARK WEIGHTS)
 # -----------------------------------------------------------------------------
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 BASE_DIR = Path(__file__).parent.resolve()
-CHECKPOINT_DIR = BASE_DIR / 'checkpoints'
+CKPT_PATH = BASE_DIR / 'checkpoints' / 'best_liters_mamba_ArcGIS_Map.pth'
 
-MODEL_CACHE = {}
-
-def get_model(checkpoint_choice='ArcGIS Map (Default)'):
-    tag_map = {
-        'ArcGIS Map (Default)': 'best_liters_mamba_ArcGIS_Map.pth',
-        'Bing Maps': 'best_liters_mamba_Bing_Maps.pth',
-        'Google Maps': 'best_liters_mamba_Google_Maps.pth'
-    }
-    filename = tag_map.get(checkpoint_choice, 'best_liters_mamba_ArcGIS_Map.pth')
-    if filename in MODEL_CACHE:
-        return MODEL_CACHE[filename]
-
-    ckpt_path = CHECKPOINT_DIR / filename
-    model = LiteRSMamba(num_classes=7)
-    if ckpt_path.exists():
-        ckpt = torch.load(ckpt_path, map_location=DEVICE)
-        state = ckpt.get('model_state_dict', ckpt)
-        model.load_state_dict(state, strict=True)
-    model.to(DEVICE)
-    model.eval()
-    MODEL_CACHE[filename] = model
-    return model
-
-_ = get_model('ArcGIS Map (Default)')
+model = LiteRSMamba(num_classes=7)
+if CKPT_PATH.exists():
+    ckpt = torch.load(CKPT_PATH, map_location=DEVICE)
+    state = ckpt.get('model_state_dict', ckpt)
+    model.load_state_dict(state, strict=True)
+model.to(DEVICE)
+model.eval()
 
 # -----------------------------------------------------------------------------
-# 4. TTA & ATTENTION SALIENCY
-# -----------------------------------------------------------------------------
-def apply_reference_histogram_matching(image_np):
-    matched = np.zeros_like(image_np)
-    target_stats = [(92.4, 45.2), (105.1, 41.8), (90.2, 38.6)]
-    for c in range(3):
-        ch = image_np[:, :, c].astype(np.float32)
-        c_mean, c_std = ch.mean(), ch.std() + 1e-6
-        t_mean, t_std = target_stats[c]
-        aligned = (ch - c_mean) * (t_std / c_std) + t_mean
-        matched[:, :, c] = np.clip(aligned, 0, 255).astype(np.uint8)
-    return matched
-
-def generate_saliency_overlay(model, original_pil):
-    feat = model.last_stem_features
-    if feat is None:
-        return original_pil
-    sal_map = feat.detach().abs().mean(dim=1).squeeze(0).cpu().numpy()
-    sal_map = (sal_map - sal_map.min()) / (sal_map.max() - sal_map.min() + 1e-8)
-    sal_pil = Image.fromarray((sal_map * 255).astype(np.uint8)).resize(original_pil.size, Image.Resampling.BILINEAR)
-    sal_norm = np.array(sal_pil).astype(np.float32) / 255.0
-    colored_map = (cm.jet(sal_norm)[:, :, :3] * 255).astype(np.uint8)
-    orig_np = np.array(original_pil.convert('RGB'))
-    blended = (0.55 * orig_np + 0.45 * colored_map).astype(np.uint8)
-    return Image.fromarray(blended)
-
-# -----------------------------------------------------------------------------
-# 5. PREDICTION HANDLER (ENGLISH ONLY, MINIMALIST)
+# 4. PREDICTION HANDLER (CLEAN & DIRECT)
 # -----------------------------------------------------------------------------
 @gpu_decorator
-def predict(input_image, checkpoint_choice, use_tta, show_heatmap):
+def predict(input_image):
     if input_image is None:
         return (
-            "<div style='text-align: center; color: #94a3b8; padding: 24px;'>Please upload a satellite image to classify.</div>",
+            "<div style='text-align: center; color: #94a3b8; padding: 40px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload a satellite image to classify.</div>",
             {},
-            None,
             ""
         )
     
@@ -260,15 +212,7 @@ def predict(input_image, checkpoint_choice, use_tta, show_heatmap):
     original_pil = Image.fromarray(input_image) if isinstance(input_image, np.ndarray) else input_image
     original_pil = original_pil.convert('RGB')
     
-    if use_tta:
-        img_np = np.array(original_pil)
-        img_np = apply_reference_histogram_matching(img_np)
-        processed_pil = Image.fromarray(img_np)
-    else:
-        processed_pil = original_pil
-
-    inp_tensor = EVAL_TRANSFORMS(processed_pil).unsqueeze(0).to(DEVICE)
-    model = get_model(checkpoint_choice)
+    inp_tensor = EVAL_TRANSFORMS(original_pil).unsqueeze(0).to(DEVICE)
     
     with torch.no_grad():
         logits = model(inp_tensor)
@@ -285,14 +229,12 @@ def predict(input_image, checkpoint_choice, use_tta, show_heatmap):
 
     prob_dict = {f"{CLASS_ICONS[c]} {c.replace('_', ' ')}": float(probs[i]) for i, c in enumerate(CLASS_NAMES)}
 
-    overlay_pil = generate_saliency_overlay(model, original_pil) if show_heatmap else processed_pil
-
     badge_html = f"""
-    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; text-align: center;">
-        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; font-weight: 600; margin-bottom: 4px;">Predicted Category</div>
-        <div style="font-size: 26px; font-weight: 800; color: #0f172a; margin: 4px 0;">{pred_icon} {clean_name}</div>
-        <div style="font-size: 13px; color: #475569; margin-bottom: 10px; max-width: 440px; margin-left: auto; margin-right: auto;">{pred_desc}</div>
-        <div style="display: inline-block; background: #e0f2fe; color: #0284c7; padding: 4px 14px; border-radius: 9999px; font-weight: 700; font-size: 14px;">
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 22px; text-align: center;">
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; font-weight: 600; margin-bottom: 6px;">Predicted Category</div>
+        <div style="font-size: 28px; font-weight: 800; color: #0f172a; margin: 6px 0;">{pred_icon} {clean_name}</div>
+        <div style="font-size: 14px; color: #475569; margin-bottom: 12px; max-width: 440px; margin-left: auto; margin-right: auto; line-height: 1.4;">{pred_desc}</div>
+        <div style="display: inline-block; background: #e0f2fe; color: #0284c7; padding: 5px 16px; border-radius: 9999px; font-weight: 700; font-size: 15px;">
             {pred_conf:.1f}% Confidence
         </div>
     </div>
@@ -300,21 +242,21 @@ def predict(input_image, checkpoint_choice, use_tta, show_heatmap):
 
     device_label = "GPU" if DEVICE.type == 'cuda' else "CPU"
     telemetry_html = f"""
-    <div style="text-align: center; font-size: 12px; color: #64748b; padding-top: 6px;">
-        ⚡ <b>Inference:</b> {elapsed_ms:.1f} ms ({device_label}) &nbsp;|&nbsp; 📦 <b>Model:</b> 2.05M Params (8.25 MB)
+    <div style="text-align: center; font-size: 12px; color: #94a3b8; padding-top: 8px;">
+        ⚡ <b>Inference:</b> {elapsed_ms:.1f} ms ({device_label}) &nbsp;|&nbsp; 📦 <b>Architecture:</b> LiteRS-Mamba (2.05M Params)
     </div>
     """
 
-    return badge_html, prob_dict, overlay_pil, telemetry_html
+    return badge_html, prob_dict, telemetry_html
 
 # -----------------------------------------------------------------------------
-# 6. MINIMALIST, CLEAN GRADIO INTERFACE (ENGLISH ONLY)
+# 5. ULTRA-CLEAN GRADIO INTERFACE (ENGLISH ONLY, NO CLUTTER)
 # -----------------------------------------------------------------------------
 custom_css = """
-.gradio-container { max-width: 1050px !important; margin: 0 auto !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-#title-banner { text-align: center; padding: 20px 0 10px 0; margin-bottom: 8px; }
-#title-banner h1 { font-size: 28px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0; }
-#title-banner p { font-size: 14px; color: #64748b; margin: 0; }
+.gradio-container { max-width: 960px !important; margin: 0 auto !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+#title-banner { text-align: center; padding: 24px 0 16px 0; margin-bottom: 12px; }
+#title-banner h1 { font-size: 30px; font-weight: 800; color: #0f172a; margin: 0 0 6px 0; }
+#title-banner p { font-size: 15px; color: #64748b; margin: 0; }
 footer { display: none !important; }
 """
 
@@ -323,37 +265,24 @@ with gr.Blocks(title="LiteRS-Mamba") as demo:
     gr.HTML("""
     <div id="title-banner">
         <h1>🛰️ LiteRS-Mamba</h1>
-        <p>Satellite Land Cover Classification for Bangladesh</p>
+        <p>Satellite Land Cover Classification</p>
     </div>
     """)
 
     with gr.Row():
         with gr.Column(scale=1):
-            image_input = gr.Image(type="pil", label="Input Satellite Image", height=280)
-            
-            with gr.Row():
-                checkpoint_dropdown = gr.Dropdown(
-                    choices=['ArcGIS Map (Default)', 'Bing Maps', 'Google Maps'],
-                    value='ArcGIS Map (Default)',
-                    label="Model Training Domain"
-                )
-            
-            with gr.Row():
-                tta_checkbox = gr.Checkbox(label="Color Adaptation (TTA)", value=False)
-                heatmap_checkbox = gr.Checkbox(label="Show Attention Heatmap", value=True)
-
+            image_input = gr.Image(type="pil", label="Upload Satellite Image", height=320)
             classify_btn = gr.Button("Classify Image", variant="primary", size="lg")
 
         with gr.Column(scale=1):
-            badge_output = gr.HTML("<div style='text-align: center; color: #94a3b8; padding: 24px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload a satellite image to classify.</div>")
-            image_output = gr.Image(label="Attention Heatmap Overlay", height=240)
-            label_output = gr.Label(num_top_classes=3, label="Top Probabilities")
+            badge_output = gr.HTML("<div style='text-align: center; color: #94a3b8; padding: 40px; border: 1px dashed #cbd5e1; border-radius: 12px;'>Upload a satellite image to see classification results.</div>")
+            label_output = gr.Label(num_top_classes=5, label="Top Class Probabilities")
             telemetry_output = gr.HTML("")
 
     classify_btn.click(
         fn=predict,
-        inputs=[image_input, checkpoint_dropdown, tta_checkbox, heatmap_checkbox],
-        outputs=[badge_output, label_output, image_output, telemetry_output],
+        inputs=[image_input],
+        outputs=[badge_output, label_output, telemetry_output],
         api_name="predict"
     )
 
@@ -365,7 +294,3 @@ if __name__ == '__main__':
         theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"),
         share=False
     )
-
-
-
-
