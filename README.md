@@ -8,7 +8,7 @@ sdk_version: 6.30.0
 app_file: app.py
 pinned: false
 license: mit
-short_description: Real-time 7-class satellite land cover classification across Bangladesh deltaic ecosystems.
+short_description: Real-time satellite land cover classification.
 ---
 
 # 🛰️ LiteRS-Mamba: Real-Time Multi-Platform Remote Sensing Land Cover Intelligence for Bangladesh
