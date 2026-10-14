@@ -1,3 +1,10 @@
+try:
+    import spaces
+    gpu_decorator = spaces.GPU(duration=15)
+except Exception:
+    def gpu_decorator(fn):
+        return fn
+
 # ==============================================================================
 # LiteRS-Mamba: Real-Time Satellite Land Cover Classification Dashboard
 # Multi-Platform Remote Sensing Intelligence for Bangladesh Deltaic Terrain
@@ -268,6 +275,7 @@ def generate_saliency_overlay(model, input_tensor, original_pil):
 # -----------------------------------------------------------------------------
 # 6. CORE INFERENCE PIPELINE
 # -----------------------------------------------------------------------------
+@gpu_decorator
 def classify_satellite_scene(
     input_image,
     checkpoint_choice,
